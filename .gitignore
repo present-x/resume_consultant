@@ -1,0 +1,12 @@
+pp/
+.env
+.env.*
+**/.env
+**/.env.*
+**/__pycache__/
+**/.pytest_cache/
+**/.next/
+**/node_modules/
+*.log
+*.db
+*.sqlite3

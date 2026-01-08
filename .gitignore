@@ -1,4 +1,5 @@
 pp/
+.vscode/
 .env
 .env.*
 **/.env

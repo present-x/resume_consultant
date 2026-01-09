@@ -158,7 +158,7 @@ npm run dev
 
 ```
 resume-consultant/
-├── frontend/                 # Next.js 15 前端
+├── frontend/                 # Next.js 16 前端
 │   ├── src/
 │   │   ├── app/              # App Router 页面
 │   │   │   ├── page.tsx      # 登录页
@@ -187,7 +187,7 @@ resume-consultant/
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | Next.js 15, React 19, TypeScript, Tailwind CSS |
+| 前端 | Next.js 16, React 19, TypeScript, Tailwind CSS |
 | 后端 | FastAPI, SQLAlchemy, Pydantic |
 | 数据库 | PostgreSQL |
 | LLM | DeepSeek / Kimi / Gemini API |
@@ -259,14 +259,9 @@ NEXT_PUBLIC_API_URL=http://localhost:8002
 ---
 
 <a id="公众号"></a>
-## 📮 公众号
-
+## 📮 扫码关注
 <p align="center">
   <img src="assets/readme/wechat_qrcode.jpg" alt="公众号二维码" width="260">
-</p>
-
-<p align="center">
-  <strong>爱折腾的X</strong>
 </p>
 
 ---

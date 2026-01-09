@@ -57,7 +57,7 @@ const WORKFLOW_STEPS = [
     { step: 5, title: "最终裁决与行动清单", icon: "🎯" },
 ];
 
-const MAX_CONCURRENT_ANALYSIS = 3;
+const MAX_CONCURRENT_ANALYSIS = 1;
 
 export default function ChatPage() {
     const router = useRouter();
@@ -226,6 +226,163 @@ export default function ChatPage() {
         }
     };
 
+    const reconnectToConversation = async (
+        id: number,
+        token: string,
+        initialData: { contents: Record<number, string>; completed: number[]; jobDescription: string; title: string; createdAt: string }
+    ) => {
+        if (analysisSessions.some(s => s.conversationId === id && (s.status === 'starting' || s.status === 'in_progress'))) {
+            return;
+        }
+
+        const now = Date.now();
+        const key = `${now}-reconnect-${id}`;
+        const abortController = new AbortController();
+
+        sessionStreamRef.current[key] = {
+            currentStep: null,
+            completedSteps: initialData.completed,
+            stepContents: initialData.contents,
+        };
+
+        setAnalysisSessions(prev => [
+            ...prev,
+            {
+                key,
+                startedAt: now,
+                abortController,
+                conversationId: id,
+                status: "in_progress",
+                title: initialData.title,
+                created_at: initialData.createdAt,
+                jobDescription: initialData.jobDescription,
+                streamed: sessionStreamRef.current[key]
+            }
+        ]);
+
+        try {
+            const response = await fetch(
+                `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8002"}/api/chat/stream/${id}`,
+                {
+                    headers: { Authorization: `Bearer ${token}` },
+                    signal: abortController.signal,
+                }
+            );
+
+            if (response.status === 404) {
+                setAnalysisSessions(prev => prev.filter(s => s.key !== key));
+                delete sessionStreamRef.current[key];
+                loadConversation(id);
+                return;
+            }
+
+            if (!response.ok) throw new Error("Failed to reconnect");
+
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            if (!reader) throw new Error("No body");
+
+            let buffer = "";
+            let streamError: string | null = null;
+            const conversationId = id;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+
+                while (true) {
+                    const idx = buffer.indexOf("\n\n");
+                    if (idx === -1) break;
+                    const rawEvent = buffer.slice(0, idx);
+                    buffer = buffer.slice(idx + 2);
+
+                    const dataLines = rawEvent
+                        .split("\n")
+                        .filter((l) => l.startsWith("data: "))
+                        .map((l) => l.slice(6));
+                    if (dataLines.length === 0) continue;
+
+                    const payload = dataLines.join("\n");
+                    let data: StreamEvent | null = null;
+                    try {
+                        data = JSON.parse(payload) as StreamEvent;
+                    } catch {
+                        continue;
+                    }
+
+                    if (data.type === "step_start") {
+                        if (!data.step) continue;
+                        const snap = sessionStreamRef.current[key];
+                        if (!snap) continue;
+                        snap.currentStep = data.step;
+                        if (viewConversationIdRef.current === conversationId) {
+                            setCurrentStep(data.step);
+                        }
+                    } else if (data.type === "content" && data.step) {
+                        const snap = sessionStreamRef.current[key];
+                        if (!snap) continue;
+                        snap.stepContents[data.step] = (snap.stepContents[data.step] || "") + (data.content || "");
+                        if (viewConversationIdRef.current === conversationId) {
+                            setStepContents((prev) => ({
+                                ...prev,
+                                [data.step!]: (prev[data.step!] || "") + (data.content || ""),
+                            }));
+                        }
+                    } else if (data.type === "step_end" && data.step) {
+                        const snap = sessionStreamRef.current[key];
+                        if (!snap) continue;
+
+                        if (data.content) {
+                            snap.stepContents[data.step] = data.content;
+                            if (viewConversationIdRef.current === conversationId) {
+                                setStepContents((prev) => ({
+                                    ...prev,
+                                    [data.step!]: data.content!,
+                                }));
+                            }
+                        }
+
+                        if (!snap.completedSteps.includes(data.step)) {
+                            snap.completedSteps = [...snap.completedSteps, data.step];
+                        }
+                        if (viewConversationIdRef.current === conversationId) {
+                            setCompletedSteps((prev) => [...prev, data.step!]);
+                        }
+                    } else if (data.type === "complete") {
+                        setHistory((prev) =>
+                            prev.map((h) => (h.id === conversationId ? { ...h, status: "completed" } : h))
+                        );
+                        setAnalysisSessions((prev) => prev.filter((s) => s.key !== key));
+                        delete sessionStreamRef.current[key];
+                    } else if (data.type === "stopped") {
+                        setHistory((prev) =>
+                            prev.map((h) => (h.id === conversationId ? { ...h, status: "stopped" } : h))
+                        );
+                        setAnalysisSessions((prev) => prev.filter((s) => s.key !== key));
+                        delete sessionStreamRef.current[key];
+                    } else if (data.type === "error") {
+                        streamError = data.message || "Analysis failed";
+                        break;
+                    }
+                }
+                if (streamError) break;
+            }
+            if (streamError) throw new Error(streamError);
+            if (token) fetchHistory(token);
+
+        } catch (err) {
+            if (err instanceof DOMException && err.name === "AbortError") {
+                setAnalysisSessions((prev) => prev.filter((s) => s.key !== key));
+                delete sessionStreamRef.current[key];
+                return;
+            }
+            console.error("Reconnect error", err);
+        } finally {
+            setAnalysisSessions((prev) => prev.filter((s) => s.key !== key));
+        }
+    };
+
     const loadConversation = async (id: number) => {
         const token = localStorage.getItem("token");
         if (!token) return;
@@ -248,8 +405,9 @@ export default function ChatPage() {
             setCompletedSteps([]);
             const status = history.find((h) => h.id === id)?.status;
             if (status === "in_progress") {
-                setCurrentStep(1);
-                setExpandedStep(1);
+                // Let inferredCurrentStep handle it based on completed steps
+                setCurrentStep(null);
+                setExpandedStep(null);
             } else {
                 setCurrentStep(null);
                 setExpandedStep(null);
@@ -292,6 +450,22 @@ export default function ChatPage() {
 
             const status: HistoryItem["status"] = completed.includes(5) ? "completed" : (isStoppedFromMessages ? "stopped" : "in_progress");
             setHistory((prev) => prev.map((h) => (h.id === id ? { ...h, status } : h)));
+
+            if (status === "in_progress") {
+                const maxCompleted = completed.length > 0 ? Math.max(...completed) : 0;
+                const nextStep = Math.min(maxCompleted + 1, 5);
+                setCurrentStep(nextStep);
+                setExpandedStep(nextStep);
+
+                const item = history.find(h => h.id === id);
+                reconnectToConversation(id, token, {
+                    contents,
+                    completed,
+                    jobDescription: data.job_description || "",
+                    title: item?.title || "简历分析",
+                    createdAt: item?.created_at || new Date().toISOString()
+                });
+            }
 
             // Expand the last completed step or step 4 if available
             if (completed.includes(4)) {
@@ -353,7 +527,6 @@ export default function ChatPage() {
             .sort((a, b) => a.startedAt - b.startedAt);
         if (runningSessions.length >= MAX_CONCURRENT_ANALYSIS) {
             const oldest = runningSessions[0];
-            showNotice(`同时最多可运行 ${MAX_CONCURRENT_ANALYSIS} 个分析任务，已自动停止最早任务`);
             if (oldest.conversationId) {
                 setHistory((prev) =>
                     prev.map((h) => (h.id === oldest.conversationId ? { ...h, status: "stopped" } : h))
@@ -505,6 +678,17 @@ export default function ChatPage() {
                         if (!conversationId) continue;
                         const snap = sessionStreamRef.current[key];
                         if (!snap) continue;
+
+                        if (data.content) {
+                            snap.stepContents[data.step] = data.content;
+                            if (viewConversationIdRef.current === conversationId) {
+                                setStepContents((prev) => ({
+                                    ...prev,
+                                    [data.step!]: data.content!,
+                                }));
+                            }
+                        }
+
                         if (!snap.completedSteps.includes(data.step)) {
                             snap.completedSteps = [...snap.completedSteps, data.step];
                         }
@@ -783,9 +967,7 @@ export default function ChatPage() {
                                             <button
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    if (confirm("确定要删除这条记录吗？")) {
-                                                        handleDeleteHistory(item.id);
-                                                    }
+                                                    handleDeleteHistory(item.id);
                                                 }}
                                                 className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
                                                 title="删除"

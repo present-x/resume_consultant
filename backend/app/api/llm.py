@@ -50,17 +50,26 @@ class LLMConfigResponse(BaseModel):
 @router.get("/providers", response_model=list[ProviderInfo])
 async def get_providers():
     """Get list of supported LLM providers."""
-    providers = []
-    for provider_id in LLMProvider.all():
-        info = LLMProvider.info()[provider_id]
-        providers.append(ProviderInfo(
-            id=provider_id,
-            name=info["name"],
-            icon=info["icon"],
-            default_model=info["default_model"],
-            base_url=info["base_url"]
-        ))
-    return providers
+    try:
+        print("Fetching providers...")
+        providers = []
+        for provider_id in LLMProvider.all():
+            info = LLMProvider.info()[provider_id]
+            providers.append(ProviderInfo(
+                id=provider_id,
+                name=info["name"],
+                icon=info["icon"],
+                default_model=info["default_model"],
+                base_url=info["base_url"]
+            ))
+        return providers
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching providers: {str(e)}"
+        )
 
 
 @router.get("/configs", response_model=list[LLMConfigResponse])
@@ -69,11 +78,19 @@ async def get_configs(
     db: AsyncSession = Depends(get_db)
 ):
     """Get user's LLM configurations."""
-    result = await db.execute(
-        select(LLMConfig).where(LLMConfig.user_id == current_user.id)
-    )
-    configs = result.scalars().all()
-    return [LLMConfigResponse.model_validate(c) for c in configs]
+    try:
+        result = await db.execute(
+            select(LLMConfig).where(LLMConfig.user_id == current_user.id)
+        )
+        configs = result.scalars().all()
+        return [LLMConfigResponse.model_validate(c) for c in configs]
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching configs: {str(e)}"
+        )
 
 
 @router.post("/configs", response_model=LLMConfigResponse, status_code=status.HTTP_201_CREATED)

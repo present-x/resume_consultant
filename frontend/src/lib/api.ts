@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8002";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 interface FetchOptions extends RequestInit {
     auth?: boolean;

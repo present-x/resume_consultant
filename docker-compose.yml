@@ -43,7 +43,8 @@ services:
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8002
+      NEXT_PUBLIC_API_URL: ""
+      API_URL: http://backend:8002
     ports:
       - "3001:3001"
     restart: unless-stopped
